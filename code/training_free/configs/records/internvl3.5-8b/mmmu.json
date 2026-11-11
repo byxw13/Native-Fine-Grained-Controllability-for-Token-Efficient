@@ -1,0 +1,41 @@
+{
+  "default_run": "default",
+  "runs": {
+    "default": {
+      "runtime": {
+        "model": "asset://InternVL3_5-8B",
+        "prompt_mode": "closed_think_prefix_then_pair_probe",
+        "r1_system_prompt": false,
+        "prefix": "<think>\n\n</think>\n\n<So|Okay winner>",
+        "prefix_selector": {
+          "mode": "closed_think_pair_logprob_forced_candidates",
+          "words": [
+            "So",
+            "Okay"
+          ],
+          "selection_rule": "P_pair(Okay)>=0.85_else_So",
+          "second_word_threshold": 0.85,
+          "probe_logprobs": 1,
+          "probe_count": 2,
+          "probe_prefix": "<think>\n\n</think>\n\n"
+        },
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 50,
+        "min_p": 0.0,
+        "presence_penalty": 0.0,
+        "repetition_penalty": 1.0,
+        "seed": 0,
+        "max_new_tokens": 32768,
+        "max_model_len": 40960,
+        "dtype": "bfloat16",
+        "tensor_parallel_size": 1,
+        "data_parallel_instances": 4,
+        "initial_K": 0.1,
+        "scale": 0.8,
+        "max_effective_K": 0.8
+      }
+    }
+  },
+  "interface": "runtime_record"
+}

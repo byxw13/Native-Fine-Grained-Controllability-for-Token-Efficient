@@ -1,0 +1,119 @@
+--- a/vllm/model_executor/layers/mamba/gdn_linear_attn.py
++++ b/vllm/model_executor/layers/mamba/gdn_linear_attn.py
+@@
+ import torch
+ from einops import rearrange
+ from torch import nn
+ from transformers.activations import ACT2FN
++
++from experiment_src.qwen35_linear_full_dynamic_final.vllm_gdn_runtime import (
++    decode_boundary_correction as aris_decode_boundary_correction,
++    enabled as aris_linear_enabled,
++    extend_state_dtypes as aris_extend_state_dtypes,
++    extend_state_shapes as aris_extend_state_shapes,
++    prefill_boundary_correction as aris_prefill_boundary_correction,
++)
+@@
+     def get_state_dtype(self) -> tuple[torch.dtype, torch.dtype]:
+-        return MambaStateDtypeCalculator.gated_delta_net_state_dtype(
+-            self.model_config.dtype,
+-            self.cache_config.mamba_cache_dtype,
+-            self.cache_config.mamba_ssm_cache_dtype,
++        return aris_extend_state_dtypes(
++            MambaStateDtypeCalculator.gated_delta_net_state_dtype(
++                self.model_config.dtype,
++                self.cache_config.mamba_cache_dtype,
++                self.cache_config.mamba_ssm_cache_dtype,
++            )
+         )
+@@
+     def get_state_shape(self) -> tuple[tuple[int, ...], tuple[int, ...]]:
+-        return MambaStateShapeCalculator.gated_delta_net_state_shape(
+-            self.tp_size,
+-            self.num_k_heads,
+-            self.num_v_heads,
+-            self.head_k_dim,
+-            self.head_v_dim,
+-            self.conv_kernel_size,
+-            self.num_spec,
++        return aris_extend_state_shapes(
++            self,
++            MambaStateShapeCalculator.gated_delta_net_state_shape(
++                self.tp_size,
++                self.num_k_heads,
++                self.num_v_heads,
++                self.head_k_dim,
++                self.head_v_dim,
++                self.conv_kernel_size,
++                self.num_spec,
++            ),
+         )
+@@
+             (
+                 core_attn_out_non_spec,
+                 last_recurrent_state,
+             ) = self.chunk_gated_delta_rule(
+@@
+                 cu_seqlens=non_spec_query_start_loc,
+                 use_qk_l2norm_in_kernel=True,
+             )
++            if aris_linear_enabled():
++                aris_prefill_boundary_correction(
++                    layer=self,
++                    metadata=attn_metadata,
++                    query=query_non_spec,
++                    key=key_non_spec,
++                    value=value_non_spec,
++                    log_decay=g_non_spec,
++                    beta=beta_non_spec,
++                    initial_state=initial_state,
++                    output=core_attn_out_non_spec,
++                    query_start_loc=non_spec_query_start_loc,
++                    state_indices=non_spec_state_indices_tensor,
++                )
+             # Init cache
+             ssm_state[non_spec_state_indices_tensor] = last_recurrent_state.to(
+                 ssm_state.dtype
+             )
+@@
+                     use_qk_l2norm_in_kernel=True,
+                 )
+             )
++            if aris_linear_enabled():
++                g_decode, beta_decode = fused_gdn_gating(
++                    self.A_log, a, b, self.dt_bias
++                )
++                aris_decode_boundary_correction(
++                    layer=self,
++                    metadata=attn_metadata,
++                    query=query_non_spec,
++                    key=key_non_spec,
++                    log_decay=g_decode,
++                    beta=beta_decode,
++                    output=core_attn_out_non_spec,
++                    state_indices=non_spec_state_indices_tensor,
++                )
+         else:
+             core_attn_out_non_spec, last_recurrent_state = None, None
+@@
+         fused_recurrent_gated_delta_rule_packed_decode(
+             mixed_qkv=mixed_qkv_non_spec,
+@@
+             use_qk_l2norm_in_kernel=True,
+         )
++        if aris_linear_enabled():
++            query, key, _ = self.rearrange_mixed_qkv(mixed_qkv_non_spec)
++            g_decode, beta_decode = fused_gdn_gating(
++                self.A_log, a, b, self.dt_bias
++            )
++            aris_decode_boundary_correction(
++                layer=self,
++                metadata=attn_metadata,
++                query=query,
++                key=key,
++                log_decay=g_decode,
++                beta=beta_decode,
++                output=out_buf,
++                state_indices=non_spec_state_indices_tensor,
++            )
+         return

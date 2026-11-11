@@ -1,0 +1,20 @@
+--- a/vllm/model_executor/layers/mamba/gdn_linear_attn.py
++++ b/vllm/model_executor/layers/mamba/gdn_linear_attn.py
+@@ -972,6 +972,9 @@
+             aris_inputs = aris_packed_fused_inputs(
+                 self, attn_metadata, num_actual_tokens
+             )
++            g_decode, beta_decode = fused_gdn_gating(
++                self.A_log, a, b, self.dt_bias
++            )
+             fused_recurrent_gated_delta_rule_packed_decode_with_boundary(
+                 mixed_qkv=mixed_qkv_non_spec,
+                 a=a,
+@@ -983,5 +986,7 @@
+                 out=out_buf,
+                 ssm_state_indices=non_spec_state_indices_tensor[:num_actual_tokens],
++                boundary_log_decay=g_decode,
++                boundary_beta=beta_decode,
+                 use_qk_l2norm_in_kernel=True,
+                 **aris_inputs,
+             )

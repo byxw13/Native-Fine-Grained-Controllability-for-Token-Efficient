@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "models": {
+    "ds-qwen-1.5b": {
+      "aime2024": "records/ds-qwen-1.5b/aime2024.json",
+      "aime2025": "records/ds-qwen-1.5b/aime2025.json",
+      "amc": "records/ds-qwen-1.5b/amc.json",
+      "gsm8k": "records/ds-qwen-1.5b/gsm8k.json",
+      "math500": "records/ds-qwen-1.5b/math500.json"
+    },
+    "ds-qwen-14b": {
+      "aime2024": "records/ds-qwen-14b/aime2024.json",
+      "aime2025": "records/ds-qwen-14b/aime2025.json",
+      "amc": "records/ds-qwen-14b/amc.json",
+      "gsm8k": "records/ds-qwen-14b/gsm8k.json",
+      "math500": "records/ds-qwen-14b/math500.json"
+    },
+    "ds-qwen-7b": {
+      "aime2024": "records/ds-qwen-7b/aime2024.json",
+      "aime2025": "records/ds-qwen-7b/aime2025.json",
+      "amc": "records/ds-qwen-7b/amc.json",
+      "gsm8k": "records/ds-qwen-7b/gsm8k.json",
+      "math500": "records/ds-qwen-7b/math500.json"
+    },
+    "internvl3.5-2b": {
+      "mmmu": "records/internvl3.5-2b/mmmu.json"
+    },
+    "internvl3.5-4b": {
+      "mmmu": "records/internvl3.5-4b/mmmu.json"
+    },
+    "internvl3.5-8b": {
+      "mmmu": "records/internvl3.5-8b/mmmu.json"
+    },
+    "qwen3-14b": {
+      "aime2024": "records/qwen3-14b/aime2024.json",
+      "aime2025": "records/qwen3-14b/aime2025.json",
+      "amc": "records/qwen3-14b/amc.json",
+      "gpqa": "records/qwen3-14b/gpqa.json",
+      "gsm8k": "records/qwen3-14b/gsm8k.json",
+      "humaneval": "records/qwen3-14b/humaneval.json",
+      "math500": "records/qwen3-14b/math500.json"
+    },
+    "qwen3-4b": {
+      "aime2024": "records/qwen3-4b/aime2024.json",
+      "aime2025": "records/qwen3-4b/aime2025.json",
+      "amc": "records/qwen3-4b/amc.json",
+      "gpqa": "records/qwen3-4b/gpqa.json",
+      "gsm8k": "records/qwen3-4b/gsm8k.json",
+      "humaneval": "records/qwen3-4b/humaneval.json",
+      "math500": "records/qwen3-4b/math500.json"
+    },
+    "qwen3-8b": {
+      "aime2024": "records/qwen3-8b/aime2024.json",
+      "aime2025": "records/qwen3-8b/aime2025.json",
+      "amc": "records/qwen3-8b/amc.json",
+      "gpqa": "records/qwen3-8b/gpqa.json",
+      "gsm8k": "records/qwen3-8b/gsm8k.json",
+      "humaneval": "records/qwen3-8b/humaneval.json",
+      "math500": "records/qwen3-8b/math500.json"
+    },
+    "qwen3.5-2b": {
+      "mmmu": "records/qwen3.5-2b/mmmu.json"
+    },
+    "qwen3.5-4b": {
+      "mmmu": "records/qwen3.5-4b/mmmu.json"
+    },
+    "qwen3.5-9b": {
+      "mmmu": "records/qwen3.5-9b/mmmu.json"
+    }
+  }
+}

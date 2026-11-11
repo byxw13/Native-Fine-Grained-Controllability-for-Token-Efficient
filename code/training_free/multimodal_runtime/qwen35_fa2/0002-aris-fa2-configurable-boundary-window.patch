@@ -1,0 +1,130 @@
+diff --git a/csrc/flash_attn/flash_api.cpp b/csrc/flash_attn/flash_api.cpp
+--- a/csrc/flash_attn/flash_api.cpp
++++ b/csrc/flash_attn/flash_api.cpp
+@@ -548,3 +548,5 @@ mha_varlen_fwd(at::Tensor &q,
+                int aris_layer_idx,
+                int aris_num_layers,
+-               int aris_words_per_layer) {
++               int aris_words_per_layer,
++               int aris_window_left,
++               int aris_window_right) {
+@@ -660,4 +662,8 @@ mha_varlen_fwd(at::Tensor &q,
+         TORCH_CHECK(aris_layer_idx >= 0 && aris_layer_idx < aris_num_layers, "aris_layer_idx out of range");
+         TORCH_CHECK(aris_head_mask_table.numel() >= aris_num_layers * aris_words_per_layer,
+                     "aris_head_mask_table is too small for aris_num_layers * aris_words_per_layer");
++        TORCH_CHECK(aris_window_left >= 0, "aris_window_left must be non-negative");
++        TORCH_CHECK(aris_window_right >= 0, "aris_window_right must be non-negative");
++        TORCH_CHECK(aris_window_left + aris_window_right + 1 <= 3,
++                    "ARIS fused boundary window currently supports at most three positions");
+     }
+@@ -733,4 +739,6 @@ mha_varlen_fwd(at::Tensor &q,
+         params.aris_layer_idx = aris_layer_idx;
+         params.aris_num_layers = aris_num_layers;
+         params.aris_words_per_layer = aris_words_per_layer;
++        params.aris_window_left = aris_window_left;
++        params.aris_window_right = aris_window_right;
+     }
+diff --git a/csrc/flash_attn/flash_api_torch_lib.cpp b/csrc/flash_attn/flash_api_torch_lib.cpp
+--- a/csrc/flash_attn/flash_api_torch_lib.cpp
++++ b/csrc/flash_attn/flash_api_torch_lib.cpp
+@@ -50,3 +50,5 @@ mha_varlen_fwd(at::Tensor &q,
+                int aris_layer_idx,
+                int aris_num_layers,
+-               int aris_words_per_layer);
++               int aris_words_per_layer,
++               int aris_window_left,
++               int aris_window_right);
+@@ -121,3 +123,4 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
+             "int num_splits, Generator? gen, Tensor? aris_enabled, Tensor? aris_budget_ids, "
+             "Tensor? aris_end_positions, Tensor? aris_head_mask_table, int aris_layer_idx, "
+-            "int aris_num_layers, int aris_words_per_layer) -> Tensor[]");
++            "int aris_num_layers, int aris_words_per_layer, int aris_window_left, "
++            "int aris_window_right) -> Tensor[]");
+diff --git a/csrc/flash_attn/src/flash.h b/csrc/flash_attn/src/flash.h
+--- a/csrc/flash_attn/src/flash.h
++++ b/csrc/flash_attn/src/flash.h
+@@ -115,3 +115,5 @@ struct Flash_fwd_params : public Qkv_params {
+     int aris_words_per_layer;
+     int aris_layer_idx;
++    int aris_window_left;
++    int aris_window_right;
+ 
+diff --git a/csrc/flash_attn/src/flash_fwd_kernel.h b/csrc/flash_attn/src/flash_fwd_kernel.h
+--- a/csrc/flash_attn/src/flash_fwd_kernel.h
++++ b/csrc/flash_attn/src/flash_fwd_kernel.h
+@@ -345,5 +345,6 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
+         FLASH_NAMESPACE::apply_aris_selected_key_mask(
+             acc_s, n_block * kBlockN, kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
+             kNWarps * 16, aris_end_pos, aris_head_mask_words, params.aris_words_per_layer,
+-            bidh, binfo.actual_seqlen_q, params.seqlenq_ngroups_swapped
++            bidh, binfo.actual_seqlen_q, params.seqlenq_ngroups_swapped,
++            params.aris_window_left, params.aris_window_right
+         );
+@@ -425,5 +426,6 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
+         FLASH_NAMESPACE::apply_aris_selected_key_mask(
+             acc_s, n_block * kBlockN, kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
+             kNWarps * 16, aris_end_pos, aris_head_mask_words, params.aris_words_per_layer,
+-            bidh, binfo.actual_seqlen_q, params.seqlenq_ngroups_swapped
++            bidh, binfo.actual_seqlen_q, params.seqlenq_ngroups_swapped,
++            params.aris_window_left, params.aris_window_right
+         );
+@@ -953,5 +955,6 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
+         FLASH_NAMESPACE::apply_aris_selected_key_mask(
+             acc_s, n_block * kBlockN, kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
+             kNWarps * 16, aris_end_pos, aris_head_mask_words, params.aris_words_per_layer,
+-            bidh, binfo.actual_seqlen_q, params.seqlenq_ngroups_swapped
++            bidh, binfo.actual_seqlen_q, params.seqlenq_ngroups_swapped,
++            params.aris_window_left, params.aris_window_right
+         );
+@@ -1043,5 +1046,6 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
+         FLASH_NAMESPACE::apply_aris_selected_key_mask(
+             acc_s, n_block * kBlockN, kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
+             kNWarps * 16, aris_end_pos, aris_head_mask_words, params.aris_words_per_layer,
+-            bidh, binfo.actual_seqlen_q, params.seqlenq_ngroups_swapped
++            bidh, binfo.actual_seqlen_q, params.seqlenq_ngroups_swapped,
++            params.aris_window_left, params.aris_window_right
+         );
+diff --git a/csrc/flash_attn/src/mask.h b/csrc/flash_attn/src/mask.h
+--- a/csrc/flash_attn/src/mask.h
++++ b/csrc/flash_attn/src/mask.h
+@@ -227,8 +227,12 @@ __forceinline__ __device__ void apply_aris_selected_key_mask(
+     const int bidh,
+     const int seqlen_q,
+-    const bool seqlenq_ngroups_swapped) {
++    const bool seqlenq_ngroups_swapped,
++    const int aris_window_left,
++    const int aris_window_right) {
++    const int aris_window_start = aris_end_pos - aris_window_left;
++    const int aris_window_stop = aris_end_pos + aris_window_right;
+     if (aris_head_mask_words == nullptr || aris_end_pos < 0 || aris_words_per_layer <= 0
+-            || aris_end_pos + 1 < col_idx_offset_
+-            || aris_end_pos >= col_idx_offset_ + block_n) {
++            || aris_window_stop < col_idx_offset_
++            || aris_window_start >= col_idx_offset_ + block_n) {
+         return;
+     }
+@@ -273,5 +277,5 @@ __forceinline__ __device__ void apply_aris_selected_key_mask(
+                 #pragma unroll
+                 for (int j = 0; j < size<1, 0>(tensor); ++j) {
+                     const int col_idx = col_idx_base + j;
+-                    if (col_idx == aris_end_pos || col_idx == aris_end_pos + 1) {
++                    if (col_idx >= aris_window_start && col_idx <= aris_window_stop) {
+                         tensor(make_coord(i, mi), make_coord(j, nj)) = -INFINITY;
+                     }
+diff --git a/vllm_flash_attn/flash_attn_interface.py b/vllm_flash_attn/flash_attn_interface.py
+--- a/vllm_flash_attn/flash_attn_interface.py
++++ b/vllm_flash_attn/flash_attn_interface.py
+@@ -176,4 +176,6 @@ def flash_attn_varlen_func(
+     aris_layer_idx: int = -1,
+     aris_num_layers: int = 0,
+     aris_words_per_layer: int = 0,
++    aris_window_left: int = 0,
++    aris_window_right: int = 1,
+ ):
+@@ -293,4 +295,6 @@ def flash_attn_varlen_func(
+             aris_layer_idx,
+             aris_num_layers,
+             aris_words_per_layer,
++            aris_window_left,
++            aris_window_right,
+         )

@@ -1,0 +1,11 @@
+{
+  "provenance": "Qwen3-VL scale=0.8 bootstrap only; replace after Qwen3.5 Head Summary",
+  "signal_calibration": {
+    "entropy_lo": 0.00035,
+    "entropy_hi": 1.033212,
+    "delta_entropy_hi": 0.658994,
+    "margin_lo": 0.504037,
+    "margin_hi": 0.999947
+  }
+}
+

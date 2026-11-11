@@ -1,0 +1,64 @@
+{
+  "default_run": "default",
+  "runs": {
+    "default": {
+      "required_assets": {
+        "summary_json": "qwen3_8b_first100_nothink_head_scores_summary_20260420_rerun5.json",
+        "signal_calibration_json": "qwen3_8b_signal_q90_recal_20260421.json",
+        "question_lambda_calibration_json": "qwen3_8b_question_lambda_q90_recal_20260421.json"
+      },
+      "environment": {
+        "ARIS_QWEN3_USER_PROMPT_STYLE": null,
+        "ARIS_QWEN3_REQUIRE_END_THINK": null
+      },
+      "arguments": {
+        "reset-seed-per-sample": true,
+        "checkpoint-zero": false,
+        "disable-assistant-prefix-checkpoint": true,
+        "initial-suppression": 0.1,
+        "max-new-tokens": 16384,
+        "temperature": 0.6,
+        "presence-penalty": 0.0,
+        "seed": 3407,
+        "assistant-prefix-text": "Alright",
+        "cue-text": "",
+        "cue-threshold": 0.1,
+        "min-tokens-before-cue": 0,
+        "final-answer-prefix-text": "the answer is ",
+        "final-answer-prefix-trigger-ratio": 0.98,
+        "tail-soft-ratio": 0.99999,
+        "tail-full-ratio": 1.0,
+        "tail-exp-beta": 3.0,
+        "tail-threshold-max": 1.0,
+        "tail-signal-trigger-ratio": 0.8,
+        "tail-signal-text": "</think>\n",
+        "entropy-upper-bound": 1.0,
+        "suppression-curve": "exp_saturating",
+        "power-exponent": 0.65,
+        "exp-beta": 2.0,
+        "suppression-scale": 0.8,
+        "suppression-upper-bound": 1.0,
+        "raw-history-size": 10,
+        "k-smoothing-initial-rho": 1.0,
+        "k-smoothing-late-rho": 1.0,
+        "k-smoothing-initial-checkpoints": 6,
+        "upgrade-newline-span": 1,
+        "downgrade-newline-span": 10,
+        "downgrade-confirm-windows": 5,
+        "post-downgrade-upgrade-freeze-newlines": 0,
+        "end-think-to-l1-lock": true,
+        "end-think-mask-newlines": 0,
+        "end-think-mask-tokens": 1,
+        "end-think-mask-forever": false,
+        "end-think-bridge-text": ".",
+        "debug-runtime-events": false,
+        "skip-judge": true,
+        "calibration-only": false,
+        "max-retries": 2,
+        "retry-sleep": 3.0,
+        "request-timeout": 60.0,
+        "disable-custom-attention-patch": false
+      }
+    }
+  }
+}

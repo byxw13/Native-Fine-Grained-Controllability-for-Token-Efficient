@@ -1,0 +1,106 @@
+--- a/vllm/model_executor/layers/mamba/gdn_linear_attn.py
++++ b/vllm/model_executor/layers/mamba/gdn_linear_attn.py
+@@ -8,10 +8,16 @@
+ from transformers.activations import ACT2FN
+ 
+ from experiment_src.qwen35_linear_full_dynamic_final.vllm_gdn_runtime import (
+     decode_boundary_correction as aris_decode_boundary_correction,
+     enabled as aris_linear_enabled,
+     extend_state_dtypes as aris_extend_state_dtypes,
+     extend_state_shapes as aris_extend_state_shapes,
++    packed_fused_enabled as aris_packed_fused_enabled,
++    packed_fused_inputs as aris_packed_fused_inputs,
+     prefill_boundary_correction as aris_prefill_boundary_correction,
++    record_packed_fused_decode as aris_record_packed_fused_decode,
+ )
++from experiment_src.qwen35_linear_full_dynamic_final.fused_gdn_boundary import (
++    fused_recurrent_gated_delta_rule_packed_decode_with_boundary,
++)
+ 
+@@ -965,28 +971,47 @@
+-        fused_recurrent_gated_delta_rule_packed_decode(
+-            mixed_qkv=mixed_qkv_non_spec,
+-            a=a,
+-            b=b,
+-            A_log=self.A_log,
+-            dt_bias=self.dt_bias,
+-            scale=self.head_k_dim**-0.5,
+-            initial_state=ssm_state,
+-            out=out_buf,
+-            ssm_state_indices=non_spec_state_indices_tensor[:num_actual_tokens],
+-            use_qk_l2norm_in_kernel=True,
+-        )
+-        if aris_linear_enabled():
+-            query, key, _ = self.rearrange_mixed_qkv(mixed_qkv_non_spec)
+-            g_decode, beta_decode = fused_gdn_gating(
+-                self.A_log, a, b, self.dt_bias
++        if aris_linear_enabled() and aris_packed_fused_enabled():
++            aris_inputs = aris_packed_fused_inputs(
++                self, attn_metadata, num_actual_tokens
+             )
+-            aris_decode_boundary_correction(
+-                layer=self,
+-                metadata=attn_metadata,
+-                query=query,
+-                key=key,
+-                log_decay=g_decode,
+-                beta=beta_decode,
+-                output=out_buf,
+-                state_indices=non_spec_state_indices_tensor,
++            fused_recurrent_gated_delta_rule_packed_decode_with_boundary(
++                mixed_qkv=mixed_qkv_non_spec,
++                a=a,
++                b=b,
++                A_log=self.A_log,
++                dt_bias=self.dt_bias,
++                scale=self.head_k_dim**-0.5,
++                initial_state=ssm_state,
++                out=out_buf,
++                ssm_state_indices=non_spec_state_indices_tensor[:num_actual_tokens],
++                use_qk_l2norm_in_kernel=True,
++                **aris_inputs,
+             )
++            aris_record_packed_fused_decode(num_actual_tokens)
++        else:
++            fused_recurrent_gated_delta_rule_packed_decode(
++                mixed_qkv=mixed_qkv_non_spec,
++                a=a,
++                b=b,
++                A_log=self.A_log,
++                dt_bias=self.dt_bias,
++                scale=self.head_k_dim**-0.5,
++                initial_state=ssm_state,
++                out=out_buf,
++                ssm_state_indices=non_spec_state_indices_tensor[:num_actual_tokens],
++                use_qk_l2norm_in_kernel=True,
++            )
++            if aris_linear_enabled():
++                query, key, _ = self.rearrange_mixed_qkv(mixed_qkv_non_spec)
++                g_decode, beta_decode = fused_gdn_gating(
++                    self.A_log, a, b, self.dt_bias
++                )
++                aris_decode_boundary_correction(
++                    layer=self,
++                    metadata=attn_metadata,
++                    query=query,
++                    key=key,
++                    log_decay=g_decode,
++                    beta=beta_decode,
++                    output=out_buf,
++                    state_indices=non_spec_state_indices_tensor,
++                )
+         return
+--- a/vllm/model_executor/models/qwen3_5.py
++++ b/vllm/model_executor/models/qwen3_5.py
+@@ -746,5 +746,10 @@
+         local_value_heads = hf_config.linear_num_value_heads // tp_size
+         return native + (
+-            (local_value_heads, 2, hf_config.linear_key_head_dim),
++            (
++                local_value_heads,
++                (hf_config.linear_value_head_dim + 31) // 32,
++                2,
++                hf_config.linear_key_head_dim,
++            ),
+             (local_value_heads, 2, hf_config.linear_value_head_dim),
+         )

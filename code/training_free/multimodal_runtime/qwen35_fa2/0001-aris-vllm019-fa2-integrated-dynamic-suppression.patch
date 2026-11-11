@@ -1,0 +1,326 @@
+diff --git a/csrc/flash_attn/flash_api.cpp b/csrc/flash_attn/flash_api.cpp
+index 2811e7c..e158310 100644
+--- a/csrc/flash_attn/flash_api.cpp
++++ b/csrc/flash_attn/flash_api.cpp
+@@ -534,7 +534,14 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
+                const float softcap,
+                const bool return_softmax,
+                int num_splits,
+-               std::optional<at::Generator> gen_) {
++               std::optional<at::Generator> gen_,
++               std::optional<at::Tensor> &aris_enabled_,
++               std::optional<at::Tensor> &aris_budget_ids_,
++               std::optional<at::Tensor> &aris_end_positions_,
++               std::optional<at::Tensor> &aris_head_mask_table_,
++               int aris_layer_idx,
++               int aris_num_layers,
++               int aris_words_per_layer) {
+ 
+     // Otherwise the kernel will be launched from cuda:0 device
+     at::cuda::CUDAGuard device_guard{q.device()};
+@@ -631,6 +638,29 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
+         CHECK_SHAPE(seqused_k_, batch_size);
+     }
+ 
++    const bool aris_has_metadata = aris_enabled_.has_value() && aris_budget_ids_.has_value()
++        && aris_end_positions_.has_value() && aris_head_mask_table_.has_value();
++    if (aris_has_metadata) {
++        auto aris_enabled = aris_enabled_.value();
++        auto aris_budget_ids = aris_budget_ids_.value();
++        auto aris_end_positions = aris_end_positions_.value();
++        auto aris_head_mask_table = aris_head_mask_table_.value();
++        TORCH_CHECK(aris_enabled.dtype() == torch::kInt32, "aris_enabled must have dtype int32");
++        TORCH_CHECK(aris_budget_ids.dtype() == torch::kInt32, "aris_budget_ids must have dtype int32");
++        TORCH_CHECK(aris_end_positions.dtype() == torch::kInt32, "aris_end_positions must have dtype int32");
++        TORCH_CHECK(aris_head_mask_table.dtype() == torch::kInt64, "aris_head_mask_table must have dtype int64 bit words");
++        CHECK_DEVICE(aris_enabled); CHECK_DEVICE(aris_budget_ids); CHECK_DEVICE(aris_end_positions); CHECK_DEVICE(aris_head_mask_table);
++        CHECK_CONTIGUOUS(aris_enabled); CHECK_CONTIGUOUS(aris_budget_ids); CHECK_CONTIGUOUS(aris_end_positions); CHECK_CONTIGUOUS(aris_head_mask_table);
++        CHECK_SHAPE(aris_enabled, batch_size);
++        CHECK_SHAPE(aris_budget_ids, batch_size);
++        CHECK_SHAPE(aris_end_positions, batch_size);
++        TORCH_CHECK(aris_num_layers > 0, "aris_num_layers must be positive");
++        TORCH_CHECK(aris_words_per_layer > 0, "aris_words_per_layer must be positive");
++        TORCH_CHECK(aris_layer_idx >= 0 && aris_layer_idx < aris_num_layers, "aris_layer_idx out of range");
++        TORCH_CHECK(aris_head_mask_table.numel() >= aris_num_layers * aris_words_per_layer,
++                    "aris_head_mask_table is too small for aris_num_layers * aris_words_per_layer");
++    }
++
+     at::Tensor out;
+     if (out_.has_value()) {
+         out = out_.value();
+@@ -693,6 +723,16 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
+                      /*unpadded_lse*/true);
+     params.total_q = total_q;
+ 
++    if (aris_has_metadata) {
++        params.aris_enabled = static_cast<int *>(aris_enabled_.value().data_ptr());
++        params.aris_budget_ids = static_cast<int *>(aris_budget_ids_.value().data_ptr());
++        params.aris_end_positions = static_cast<int *>(aris_end_positions_.value().data_ptr());
++        params.aris_head_mask_table = reinterpret_cast<uint64_t *>(aris_head_mask_table_.value().data_ptr<int64_t>());
++        params.aris_layer_idx = aris_layer_idx;
++        params.aris_num_layers = aris_num_layers;
++        params.aris_words_per_layer = aris_words_per_layer;
++    }
++
+     if (paged_KV) {
+         params.block_table = block_table.data_ptr<int>();
+         params.block_table_batch_stride = block_table.stride(0);
+diff --git a/csrc/flash_attn/flash_api_torch_lib.cpp b/csrc/flash_attn/flash_api_torch_lib.cpp
+index be2d23c..fcb2d07 100644
+--- a/csrc/flash_attn/flash_api_torch_lib.cpp
++++ b/csrc/flash_attn/flash_api_torch_lib.cpp
+@@ -36,7 +36,14 @@ mha_varlen_fwd(at::Tensor &q,  // total_q x num_heads x head_size, total_q := \s
+                const float softcap,
+                const bool return_softmax,
+                int num_splits,
+-               std::optional<at::Generator> gen_);
++               std::optional<at::Generator> gen_,
++               std::optional<at::Tensor> &aris_enabled_,
++               std::optional<at::Tensor> &aris_budget_ids_,
++               std::optional<at::Tensor> &aris_end_positions_,
++               std::optional<at::Tensor> &aris_head_mask_table_,
++               int aris_layer_idx,
++               int aris_num_layers,
++               int aris_words_per_layer);
+ 
+ std::vector<at::Tensor>
+ mha_fwd_kvcache(at::Tensor &q,                 // batch_size x seqlen_q x num_heads x head_size
+@@ -110,7 +117,9 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
+             "Tensor cu_seqlens_k, Tensor? seqused_k, Tensor? leftpad_k, Tensor? block_table, Tensor? alibi_slopes, "
+             "int max_seqlen_q, int max_seqlen_k, float p_dropout, float softmax_scale, bool zero_tensors, "
+             "bool is_causal, int window_size_left, int window_size_right, float softcap, bool return_softmax, "
+-            "int num_splits, Generator? gen) -> Tensor[]");
++            "int num_splits, Generator? gen, Tensor? aris_enabled, Tensor? aris_budget_ids, "
++            "Tensor? aris_end_positions, Tensor? aris_head_mask_table, int aris_layer_idx, "
++            "int aris_num_layers, int aris_words_per_layer) -> Tensor[]");
+     ops.impl("varlen_fwd", torch::kCUDA, make_pytorch_shim(&mha_varlen_fwd));
+ 
+     ops.def("fwd_kvcache(Tensor! q, Tensor kcache, Tensor vcache, Tensor? k, Tensor? v, Tensor? seqlens_k, "
+@@ -139,4 +148,4 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
+ 
+ REGISTER_EXTENSION(TORCH_EXTENSION_NAME);
+ 
+-} // namespace FLASH_NAMESPACE
+\ No newline at end of file
++} // namespace FLASH_NAMESPACE
+diff --git a/csrc/flash_attn/src/flash.h b/csrc/flash_attn/src/flash.h
+index 8ffbb62..bb502bf 100644
+--- a/csrc/flash_attn/src/flash.h
++++ b/csrc/flash_attn/src/flash.h
+@@ -104,6 +104,16 @@ struct Flash_fwd_params : public Qkv_params {
+     index_t block_table_batch_stride;
+     int page_block_size;
+ 
++    // ARIS selected-head suppression metadata. Selected query heads mask the
++    // two key positions beginning at aris_end_positions[batch].
++    int * __restrict__ aris_enabled;
++    int * __restrict__ aris_budget_ids;
++    int * __restrict__ aris_end_positions;
++    uint64_t * __restrict__ aris_head_mask_table;
++    int aris_num_layers;
++    int aris_words_per_layer;
++    int aris_layer_idx;
++
+     // The dropout probability (probability of keeping an activation).
+     float p_dropout;
+     // uint32_t p_dropout_in_uint;
+diff --git a/csrc/flash_attn/src/flash_fwd_kernel.h b/csrc/flash_attn/src/flash_fwd_kernel.h
+index 7512828..05b0f18 100644
+--- a/csrc/flash_attn/src/flash_fwd_kernel.h
++++ b/csrc/flash_attn/src/flash_fwd_kernel.h
+@@ -286,6 +286,20 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
+ 
+     const float alibi_slope = !Has_alibi || params.alibi_slopes_ptr == nullptr ? 0.0f : reinterpret_cast<float *>(params.alibi_slopes_ptr)[bidb * params.alibi_slopes_batch_stride + bidh] / params.scale_softmax;
+     FLASH_NAMESPACE::Mask<Is_causal, Is_local, Has_alibi> mask(binfo.actual_seqlen_k, binfo.actual_seqlen_q, params.window_size_left, params.window_size_right, alibi_slope);
++    const uint64_t *aris_head_mask_words = nullptr;
++    int aris_end_pos = -1;
++    if (params.aris_head_mask_table != nullptr && params.aris_enabled != nullptr
++            && params.aris_budget_ids != nullptr && params.aris_end_positions != nullptr
++            && params.aris_layer_idx >= 0 && params.aris_num_layers > 0
++            && params.aris_words_per_layer > 0 && params.aris_enabled[bidb] != 0) {
++        const int aris_budget_id = params.aris_budget_ids[bidb];
++        aris_end_pos = params.aris_end_positions[bidb];
++        if (aris_budget_id >= 0 && aris_end_pos >= 0) {
++            aris_head_mask_words = params.aris_head_mask_table
++                + (aris_budget_id * params.aris_num_layers + params.aris_layer_idx)
++                    * params.aris_words_per_layer;
++        }
++    }
+ 
+     // For performance reason, we separate out two kinds of iterations:
+     // those that need masking on S, and those that don't.
+@@ -328,6 +342,11 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
+         mask.template apply_mask<Is_causal, Is_even_MN>(
+             acc_s, n_block * kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4, kNWarps * 16
+         );
++        FLASH_NAMESPACE::apply_aris_selected_key_mask(
++            acc_s, n_block * kBlockN, kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
++            kNWarps * 16, aris_end_pos, aris_head_mask_words, params.aris_words_per_layer,
++            bidh, binfo.actual_seqlen_q, params.seqlenq_ngroups_swapped
++        );
+ 
+         FLASH_NAMESPACE::cp_async_wait<0>();
+         __syncthreads();
+@@ -403,6 +422,11 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
+         mask.template apply_mask</*Causal_mask=*/false>(
+             acc_s, n_block * kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4, kNWarps * 16
+         );
++        FLASH_NAMESPACE::apply_aris_selected_key_mask(
++            acc_s, n_block * kBlockN, kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
++            kNWarps * 16, aris_end_pos, aris_head_mask_words, params.aris_words_per_layer,
++            bidh, binfo.actual_seqlen_q, params.seqlenq_ngroups_swapped
++        );
+ 
+         softmax.template softmax_rescale_o</*Is_first=*/false, /*Check_inf=*/Is_local>(acc_s, acc_o, params.scale_softmax_log2);
+ 
+@@ -863,6 +887,20 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
+ 
+     const float alibi_slope = !Has_alibi ? 0.0f : reinterpret_cast<float *>(params.alibi_slopes_ptr)[bidb * params.alibi_slopes_batch_stride + bidh] / params.scale_softmax;
+     FLASH_NAMESPACE::Mask<Is_causal, Is_local, Has_alibi> mask(binfo.actual_seqlen_k, binfo.actual_seqlen_q, params.window_size_left, params.window_size_right, alibi_slope);
++    const uint64_t *aris_head_mask_words = nullptr;
++    int aris_end_pos = -1;
++    if (params.aris_head_mask_table != nullptr && params.aris_enabled != nullptr
++            && params.aris_budget_ids != nullptr && params.aris_end_positions != nullptr
++            && params.aris_layer_idx >= 0 && params.aris_num_layers > 0
++            && params.aris_words_per_layer > 0 && params.aris_enabled[bidb] != 0) {
++        const int aris_budget_id = params.aris_budget_ids[bidb];
++        aris_end_pos = params.aris_end_positions[bidb];
++        if (aris_budget_id >= 0 && aris_end_pos >= 0) {
++            aris_head_mask_words = params.aris_head_mask_table
++                + (aris_budget_id * params.aris_num_layers + params.aris_layer_idx)
++                    * params.aris_words_per_layer;
++        }
++    }
+ 
+     // For performance reason, we separate out two kinds of iterations:
+     // those that need masking on S, and those that don't.
+@@ -912,6 +950,11 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
+         mask.template apply_mask<Is_causal, Is_even_MN>(
+             acc_s, n_block * kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4, kNWarps * 16
+         );
++        FLASH_NAMESPACE::apply_aris_selected_key_mask(
++            acc_s, n_block * kBlockN, kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
++            kNWarps * 16, aris_end_pos, aris_head_mask_words, params.aris_words_per_layer,
++            bidh, binfo.actual_seqlen_q, params.seqlenq_ngroups_swapped
++        );
+ 
+         FLASH_NAMESPACE::cp_async_wait<0>();
+         __syncthreads();
+@@ -997,6 +1040,11 @@ inline __device__ void compute_attn_1rowblock_splitkv(const Params &params, cons
+         mask.template apply_mask</*Causal_mask=*/false>(
+             acc_s, n_block * kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4, kNWarps * 16
+         );
++        FLASH_NAMESPACE::apply_aris_selected_key_mask(
++            acc_s, n_block * kBlockN, kBlockN, m_block * kBlockM + (tidx / 32) * 16 + (tidx % 32) / 4,
++            kNWarps * 16, aris_end_pos, aris_head_mask_words, params.aris_words_per_layer,
++            bidh, binfo.actual_seqlen_q, params.seqlenq_ngroups_swapped
++        );
+         softmax.template softmax_rescale_o</*Is_first=*/false, /*Check_inf=*/Is_local>(acc_s, acc_o, params.scale_softmax_log2);
+ 
+         Tensor rP = FLASH_NAMESPACE::convert_type<Element>(acc_s);
+diff --git a/csrc/flash_attn/src/mask.h b/csrc/flash_attn/src/mask.h
+index 544065d..08c6015 100644
+--- a/csrc/flash_attn/src/mask.h
++++ b/csrc/flash_attn/src/mask.h
+@@ -211,4 +211,69 @@ struct Mask {
+ 
+ };
+ 
++template <typename Engine, typename Layout>
++__forceinline__ __device__ void apply_aris_selected_key_mask(
++    Tensor<Engine, Layout> &tensor_,
++    const int col_idx_offset_,
++    const int block_n,
++    const int row_idx_offset,
++    const int warp_row_stride,
++    const int aris_end_pos,
++    const uint64_t *__restrict__ aris_head_mask_words,
++    const int aris_words_per_layer,
++    const int bidh,
++    const int seqlen_q,
++    const bool seqlenq_ngroups_swapped) {
++    if (aris_head_mask_words == nullptr || aris_end_pos < 0 || aris_words_per_layer <= 0
++            || aris_end_pos + 1 < col_idx_offset_
++            || aris_end_pos >= col_idx_offset_ + block_n) {
++        return;
++    }
++    // During regular prefill, only the final query row produces the first
++    // free-generation logits.  During the FA2 decode GQA optimization, query
++    // groups are folded into M and every valid folded row represents one
++    // query head.  Supporting both layouts is required for initial K to affect
++    // the very first free-generation forward without perturbing earlier
++    // prompt rows.
++    uint64_t first_mask_word = 0;
++    if (aris_words_per_layer == 1) {
++        first_mask_word = aris_head_mask_words[0];
++        if (first_mask_word == 0) { return; }
++    }
++    static_assert(Layout::rank == 3, "Only support 3D Tensor");
++    Tensor tensor = make_tensor(tensor_.data(), FLASH_NAMESPACE::convert_layout_acc_rowcol(tensor_.layout()));
++    const int lane_id = threadIdx.x % 32;
++    const int col_idx_offset = col_idx_offset_ + (lane_id % 4) * 2;
++    #pragma unroll
++    for (int mi = 0; mi < size<0, 1>(tensor); ++mi) {
++        const int row_idx_base = row_idx_offset + mi * warp_row_stride;
++        #pragma unroll
++        for (int i = 0; i < size<0, 0>(tensor); ++i) {
++            const int row_idx = row_idx_base + i * 8;
++            if (row_idx < 0 || row_idx >= seqlen_q) { continue; }
++            if (!seqlenq_ngroups_swapped && row_idx != seqlen_q - 1) { continue; }
++            const int query_head = seqlenq_ngroups_swapped
++                ? bidh * seqlen_q + row_idx
++                : bidh;
++            const int word_idx = query_head >> 6;
++            const int bit_idx = query_head & 63;
++            if (word_idx < 0 || word_idx >= aris_words_per_layer
++                    || ((aris_head_mask_words[word_idx] >> bit_idx) & uint64_t(1)) == 0) {
++                continue;
++            }
++            #pragma unroll
++            for (int nj = 0; nj < size<1, 1>(tensor); ++nj) {
++                const int col_idx_base = col_idx_offset + nj * 8;
++                #pragma unroll
++                for (int j = 0; j < size<1, 0>(tensor); ++j) {
++                    const int col_idx = col_idx_base + j;
++                    if (col_idx == aris_end_pos || col_idx == aris_end_pos + 1) {
++                        tensor(make_coord(i, mi), make_coord(j, nj)) = -INFINITY;
++                    }
++                }
++            }
++        }
++    }
++}
++
+ } // namespace FLASH_NAMESPACE
+diff --git a/vllm_flash_attn/flash_attn_interface.py b/vllm_flash_attn/flash_attn_interface.py
+index a61d0f9..9281ae4 100644
+--- a/vllm_flash_attn/flash_attn_interface.py
++++ b/vllm_flash_attn/flash_attn_interface.py
+@@ -166,6 +166,13 @@ def flash_attn_varlen_func(
+     cp_world_size=1,
+     cp_rank=0,
+     cp_tot_seqused_k=None,
++    aris_enabled=None,
++    aris_budget_ids=None,
++    aris_end_positions=None,
++    aris_head_mask_table=None,
++    aris_layer_idx: int = -1,
++    aris_num_layers: int = 0,
++    aris_words_per_layer: int = 0,
+ ):
+     """dropout_p should be set to 0.0 during evaluation
+     Supports multi-query and grouped-query attention (MQA/GQA) by passing in K, V with fewer heads
+@@ -273,6 +280,13 @@ def flash_attn_varlen_func(
+             return_softmax_lse and dropout_p > 0,
+             num_splits,
+             None,
++            aris_enabled,
++            aris_budget_ids,
++            aris_end_positions,
++            aris_head_mask_table,
++            aris_layer_idx,
++            aris_num_layers,
++            aris_words_per_layer,
+         )
+     elif fa_version == 3:
+         assert alibi_slopes is None, "Alibi is not supported in FA3"

@@ -1,0 +1,27 @@
+{
+  "default_run": "default",
+  "runs": {
+    "default": {
+      "runtime": {
+        "model": "asset://InternVL3_5-2B",
+        "prompt_mode": "ordinary_user_prompt_plus_one_closed_think_prefix",
+        "r1_system_prompt": false,
+        "prefix": "<think>\n\n</think>\n\nOkay",
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 50,
+        "repetition_penalty": 1.0,
+        "seed": 0,
+        "max_new_tokens": 32768,
+        "max_model_len": 40960,
+        "dtype": "bfloat16",
+        "tensor_parallel_size": 1,
+        "data_parallel_instances": 4,
+        "initial_K": 0.1,
+        "scale": 0.8,
+        "max_effective_K": 0.8
+      }
+    }
+  },
+  "interface": "runtime_record"
+}
