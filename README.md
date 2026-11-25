@@ -1,6 +1,6 @@
 # ARIS
 
-Our model weights will also be released soon. Stay tuned.
+Our model weights are available on [Hugging Face](https://huggingface.co/huang13/FineGrained-Reasoning-Checkpoints).
 
 ## Environment
 
