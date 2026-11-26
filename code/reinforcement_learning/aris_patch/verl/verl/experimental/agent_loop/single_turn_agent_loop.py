@@ -77,10 +77,16 @@ class SingleTurnAgentLoop(AgentLoopBase):
         if tokenizer_mode == "sup":
             if images is not None or videos is not None:
                 raise ValueError("ARIS sup rollout tokenizer override only supports text-only prompts.")
-            if self.rollout_sup_tokenizer is None:
-                raise ValueError("ARIS_ROLLOUT_SUP_TOKENIZER_PATH must be set for aris_rollout_tokenizer='sup'.")
-            prompt_ids = await self._apply_text_chat_template(self.rollout_sup_tokenizer, messages)
-            return prompt_ids, self.rollout_sup_tokenizer, self.rollout_sup_tokenizer_path
+            if self.rollout_sup_tokenizer is not None:
+                prompt_ids = await self._apply_text_chat_template(self.rollout_sup_tokenizer, messages)
+                return prompt_ids, self.rollout_sup_tokenizer, self.rollout_sup_tokenizer_path
+            prompt_ids = await self.apply_chat_template(
+                messages,
+                images=images,
+                videos=videos,
+            )
+            prompt_ids = append_alright_suffix(self.tokenizer, prompt_ids, prompt_length=self.prompt_length)
+            return prompt_ids, self.tokenizer, os.getenv("ARIS_TRAIN_TOKENIZER_PATH", "")
 
         prompt_ids = await self.apply_chat_template(
             messages,

@@ -12,15 +12,18 @@ case "${1:-}" in
     internvl)
         python -m pip install 'torch==2.8.0' 'vllm==0.11.0' 'transformers==4.57.6' openai pillow qwen-vl-utils tqdm numpy sentencepiece protobuf einops timm cmake ninja
         ;;
+    internvl-fa2)
+        bash "${root}/code/training_free/build_multimodal_fa2.sh" --target internvl "${2:?Pass the FlashAttention source directory}"
+        ;;
     qwen35)
         python -m pip install 'torch==2.10.0' 'vllm==0.19.1' 'transformers==5.14.1' openai pillow qwen-vl-utils tqdm numpy sentencepiece protobuf einops cmake ninja
         python "${root}/code/training_free/install_multimodal.py" --model-id "${2:-qwen3.5-4b}"
         ;;
     qwen35-fa2)
-        bash "${root}/code/training_free/build_multimodal_fa2.sh" "${2:?Pass the FlashAttention source directory}"
+        bash "${root}/code/training_free/build_multimodal_fa2.sh" --target qwen35 "${2:?Pass the FlashAttention source directory}"
         ;;
     *)
-        echo "Usage: bash install.sh {text|rl|internvl|qwen35|qwen35-fa2 SOURCE_DIR} (use separate environments)" >&2
+        echo "Usage: bash install.sh {text|rl|internvl|internvl-fa2 SOURCE_DIR|qwen35 [MODEL_ID]|qwen35-fa2 SOURCE_DIR} (use separate environments)" >&2
         exit 2
         ;;
 esac

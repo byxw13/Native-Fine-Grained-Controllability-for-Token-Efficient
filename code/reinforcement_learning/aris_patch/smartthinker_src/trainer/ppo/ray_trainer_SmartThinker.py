@@ -18,6 +18,8 @@ PPO Trainer with Ray-based single controller.
 This trainer supports model-agonistic model initialization with huggingface
 """
 
+import importlib.util
+import inspect
 import json
 import os
 import uuid
@@ -49,7 +51,51 @@ from verl.trainer.ppo.metric_utils import (
     compute_timing_metrics,
     process_validation_metrics,
 )
-from verl.trainer.ppo.reward import compute_reward, compute_reward_async
+try:
+    from verl.trainer.ppo.reward import compute_reward, compute_reward_async
+except ImportError:
+    from verl.trainer.ppo.reward import load_reward_manager as _load_reward_manager
+
+    def compute_reward(data, reward_fn):
+        try:
+            result = reward_fn(data, return_dict=True)
+        except TypeError:
+            result = reward_fn(data)
+        if isinstance(result, dict):
+            return result.get("reward_tensor"), result.get("reward_extra_info", {})
+        return result, {}
+
+    class _CompatComputeRewardAsync:
+        def remote(self, *args, **kwargs):
+            @ray.remote
+            def _compute_reward_async(data, config=None, tokenizer=None, reward_fn=None):
+                if reward_fn is None:
+                    if config is None or tokenizer is None:
+                        raise ValueError("compute_reward_async requires reward_fn or config+tokenizer.")
+                    reward_fn = _load_reward_manager(config, tokenizer, num_examine=0)
+                return compute_reward(data, reward_fn)
+
+            return _compute_reward_async.remote(*args, **kwargs)
+
+    compute_reward_async = _CompatComputeRewardAsync()
+
+
+def _resolve_need_flag(fn, config, role_worker_mapping, mapping_role_names: tuple[str, ...]) -> bool:
+    try:
+        params = tuple(inspect.signature(fn).parameters)
+    except (TypeError, ValueError):
+        params = ()
+    if params and params[0] == "config":
+        try:
+            return bool(fn(config))
+        except Exception:
+            pass
+    try:
+        return bool(fn(role_worker_mapping))
+    except (TypeError, AttributeError):
+        return any(getattr(role, "name", str(role)) in mapping_role_names for role in role_worker_mapping)
+
+
 from verl.trainer.ppo.utils import Role, WorkerType, need_critic, need_reference_policy, need_reward_model
 from verl.utils import tensordict_utils as tu
 from verl.utils.aris_rollout_suppression import (
@@ -338,9 +384,11 @@ class RayPPOTrainer:
 
         self.role_worker_mapping = role_worker_mapping
         self.resource_pool_manager = resource_pool_manager
-        self.use_reference_policy = need_reference_policy(self.role_worker_mapping)
+        self.use_reference_policy = _resolve_need_flag(
+            need_reference_policy, config, self.role_worker_mapping, ("RefPolicy", "ActorRolloutRef")
+        )
         # legacy reward model implementation
-        self.use_rm = need_reward_model(self.role_worker_mapping)
+        self.use_rm = _resolve_need_flag(need_reward_model, config, self.role_worker_mapping, ("RewardModel",))
         self.use_reward_loop = self.config.reward_model.use_reward_loop
 
         self.use_critic = need_critic(self.config)
@@ -362,7 +410,15 @@ class RayPPOTrainer:
         if self.config.algorithm.use_kl_in_reward:
             self.kl_ctrl_in_reward = core_algos.get_kl_controller(self.config.algorithm.kl_ctrl)
 
-        self.use_legacy_worker_impl = config.trainer.get("use_legacy_worker_impl", "auto")
+        use_legacy_worker_impl = config.trainer.get("use_legacy_worker_impl", "auto")
+        if use_legacy_worker_impl == "auto":
+            try:
+                legacy_available = importlib.util.find_spec("verl.workers.fsdp_workers") is not None
+            except ModuleNotFoundError:
+                legacy_available = False
+            if not legacy_available:
+                use_legacy_worker_impl = "disable"
+        self.use_legacy_worker_impl = use_legacy_worker_impl
 
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
 

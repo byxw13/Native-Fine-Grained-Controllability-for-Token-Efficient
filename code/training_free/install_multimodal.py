@@ -29,7 +29,10 @@ def check_environment(model_id, check_overlay=False, check_kernel=True):
         if not qwen:
             namespace = getattr(torch.ops, '_vllm_fa2_C', None)
             if namespace is None or not hasattr(namespace, 'varlen_fwd_aris'):
-                raise RuntimeError('Native ARIS varlen_fwd_aris is missing from the vLLM 0.11 environment.')
+                raise RuntimeError(
+                    'Native ARIS varlen_fwd_aris is missing from the vLLM 0.11 environment. '
+                    'Run: bash install.sh internvl-fa2 /sources/vllm-flash-attn-internvl'
+                )
             return root
         schema = str(torch._C._dispatch_find_schema_or_throw('_vllm_fa2_C::varlen_fwd', '').schema())
         fields = ('aris_enabled', 'aris_budget_ids', 'aris_end_positions', 'aris_head_mask_table')
