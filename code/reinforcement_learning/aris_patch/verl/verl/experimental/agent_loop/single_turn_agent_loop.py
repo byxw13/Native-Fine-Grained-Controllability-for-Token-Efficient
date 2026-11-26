@@ -19,6 +19,7 @@ from uuid import uuid4
 from verl.experimental.agent_loop.agent_loop import AgentLoopBase, AgentLoopOutput, register
 from verl.utils import hf_tokenizer
 from verl.utils.aris_rollout_suppression import (
+    align_rewritten_response_logprobs,
     append_alright_suffix,
     build_request_id,
     find_end_think_index,
@@ -132,8 +133,10 @@ class SingleTurnAgentLoop(AgentLoopBase):
         train_tokenizer = active_tokenizer
         train_tokenizer_path = active_tokenizer_path
         train_rewrite_applied = False
-        response_ids = output.token_ids[: self.response_length]
-        response_logprobs = output.log_probs[: self.response_length] if output.log_probs else None
+        raw_response_ids = output.token_ids[: self.response_length]
+        raw_response_logprobs = output.log_probs[: self.response_length] if output.log_probs else None
+        response_ids = raw_response_ids
+        response_logprobs = raw_response_logprobs
         train_response_prefix_text = ""
         if aris_tokenizer_mode == "sup" and sup_rollout_train_prompt_rewrite_enabled():
             train_prompt_ids = await self.apply_chat_template(
@@ -155,8 +158,14 @@ class SingleTurnAgentLoop(AgentLoopBase):
                     add_special_tokens=False,
                 ),
             )
-            response_ids = normalize_token_ids(train_response_ids)[: self.response_length]
-            response_logprobs = None
+            full_rewritten_ids = normalize_token_ids(train_response_ids)
+            response_ids = full_rewritten_ids[: self.response_length]
+            response_logprobs = align_rewritten_response_logprobs(
+                raw_response_ids,
+                raw_response_logprobs,
+                full_rewritten_ids,
+                self.response_length,
+            )
             train_rewrite_applied = True
 
         response_mask = [1] * len(response_ids)

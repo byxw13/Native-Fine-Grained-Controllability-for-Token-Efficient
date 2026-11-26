@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from typing import Any, Optional
 
@@ -456,3 +457,66 @@ def copy_request_id_tags(base_request_id: str, source_request_id: str) -> str:
     if marker_index < 0:
         return base_request_id
     return f"{base_request_id}{source[marker_index:]}"
+
+
+def rollout_ratio_filter_enabled() -> bool:
+    """Return True when Eq. (16) token-level rollout ratio filtering is enabled."""
+    for env_name in ("ARIS_ROLLOUT_RATIO_FILTER", "ARIS_ROLLOUT_RATIO_MASK"):
+        raw = os.getenv(env_name, "").strip().lower()
+        if raw:
+            return raw in {"1", "true", "yes", "on"}
+    return False
+
+
+def rollout_ratio_bounds() -> tuple[float, float]:
+    """Return validated (low, high) bounds for w_i = exp(old_log_prob - rollout_log_prob)."""
+    low = float(os.getenv("ARIS_ROLLOUT_RATIO_LOW", "0.8"))
+    high = float(os.getenv("ARIS_ROLLOUT_RATIO_HIGH", "1.2"))
+    if not (0.0 < low <= high):
+        raise ValueError(f"Expected 0 < low <= high for rollout ratio filter, got ({low}, {high}).")
+    return low, high
+
+
+def compute_rollout_ratio_pg_mask(
+    old_log_probs: Any,
+    rollout_log_probs: Any,
+    response_mask: Any,
+    low: float = 0.8,
+    high: float = 1.2,
+) -> tuple[Any, Any]:
+    """Filter response tokens whose importance ratio exp(old - rollout) lies outside [low, high]."""
+    import torch
+
+    if not (0.0 < low <= high):
+        raise ValueError(f"Expected 0 < low <= high for rollout ratio filter, got ({low}, {high}).")
+    mask = response_mask.to(torch.bool)
+    finite = mask & torch.isfinite(old_log_probs) & torch.isfinite(rollout_log_probs)
+    # Zero non-finite entries before subtraction so -inf - (-inf) cannot produce NaN.
+    safe_old = torch.where(finite, old_log_probs.to(torch.float32), 0.0)
+    safe_rollout = torch.where(finite, rollout_log_probs.to(torch.float32), 0.0)
+    log_ratio = safe_old - safe_rollout
+    outside = finite & ((log_ratio < math.log(low)) | (log_ratio > math.log(high)))
+    pg_keep = finite & ~outside
+    return pg_keep, outside
+
+
+def align_rewritten_response_logprobs(
+    raw_response_ids: list[int],
+    raw_response_logprobs: Optional[list[float]],
+    rewritten_response_ids: list[int],
+    response_length: int,
+) -> Optional[list[float]]:
+    """Align recorded rollout log-probs to reconstructed responses, marking prepended tokens -inf."""
+    if raw_response_logprobs is None:
+        return None
+    aligned_raw = [float(x) for x in raw_response_logprobs]
+    max_shared = min(len(rewritten_response_ids), len(raw_response_ids), len(aligned_raw))
+    suffix_len = 0
+    while suffix_len < max_shared:
+        if int(rewritten_response_ids[-1 - suffix_len]) != int(raw_response_ids[-1 - suffix_len]):
+            break
+        suffix_len += 1
+    prefix_len = len(rewritten_response_ids) - suffix_len
+    tail_logprobs = aligned_raw[len(aligned_raw) - suffix_len :] if suffix_len > 0 else []
+    aligned = [float("-inf")] * prefix_len + tail_logprobs
+    return aligned[: int(response_length)]

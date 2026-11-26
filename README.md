@@ -84,7 +84,7 @@ conda activate aris-rl
 bash install.sh rl
 
 bash code/reinforcement_learning/run.sh \
-  /output/smartthinker_run /models/DeepSeek-R1-Distill-Qwen-7B \
+  /output/smartthinker_run /models/DeepSeek-R1-Distill-Qwen-1.5B \
   /data/deepscaler_preview.parquet /data/aime25.parquet /assets/heads.json
 ```
 

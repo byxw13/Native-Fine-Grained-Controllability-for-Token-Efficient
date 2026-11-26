@@ -52,7 +52,13 @@ from verl.trainer.ppo.metric_utils import (
 from verl.trainer.ppo.reward import compute_reward, compute_reward_async
 from verl.trainer.ppo.utils import Role, WorkerType, need_critic, need_reference_policy, need_reward_model
 from verl.utils import tensordict_utils as tu
-from verl.utils.aris_rollout_suppression import annotate_training_rollouts, rollout_suppression_enabled
+from verl.utils.aris_rollout_suppression import (
+    annotate_training_rollouts,
+    compute_rollout_ratio_pg_mask,
+    rollout_ratio_bounds,
+    rollout_ratio_filter_enabled,
+    rollout_suppression_enabled,
+)
 from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path, should_save_ckpt_esi
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.debug import marked_timer
@@ -1506,6 +1512,36 @@ class RayPPOTrainer:
                                 metrics.update(calculate_debug_metrics(batch))
 
                     assert "old_log_probs" in batch.batch, f'"old_log_prob" not in {batch.batch.keys()=}'
+
+                    if rollout_ratio_filter_enabled() and not bypass_recomputing_logprobs:
+                        if "rollout_log_probs" not in batch.batch:
+                            raise ValueError(
+                                "ARIS_ROLLOUT_RATIO_FILTER requires rollout_log_probs; "
+                                "set actor_rollout_ref.rollout.calculate_log_probs=True."
+                            )
+                        ratio_low, ratio_high = rollout_ratio_bounds()
+                        response_masks = batch.batch["response_mask"].to(torch.bool)
+                        pg_keep, outside_bounds = compute_rollout_ratio_pg_mask(
+                            old_log_probs=batch.batch["old_log_probs"],
+                            rollout_log_probs=batch.batch["rollout_log_probs"],
+                            response_mask=response_masks,
+                            low=ratio_low,
+                            high=ratio_high,
+                        )
+                        batch.batch["aris_pg_keep"] = pg_keep
+                        total_tokens = int(response_masks.sum().item())
+                        kept_tokens = int(pg_keep.sum().item())
+                        masked_tokens = total_tokens - kept_tokens
+                        metrics.update(
+                            {
+                                "aris/rollout_ratio_filter/kept_tokens": kept_tokens,
+                                "aris/rollout_ratio_filter/masked_tokens": masked_tokens,
+                                "aris/rollout_ratio_filter/outside_bounds_tokens": int(outside_bounds.sum().item()),
+                                "aris/rollout_ratio_filter/masked_fraction": (
+                                    float(masked_tokens) / float(total_tokens) if total_tokens > 0 else 0.0
+                                ),
+                            }
+                        )
 
                     if self.use_reference_policy:
                         # compute reference log_prob

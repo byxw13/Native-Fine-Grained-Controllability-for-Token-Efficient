@@ -18,7 +18,7 @@ summary="$(realpath -m -- "$5")"
 shift 5
 trainer="${root}/.runtime/SmartThinker"
 if [[ ${#dry_run[@]} == 0 ]]; then
-    for path in "${model}" "${train}" "${val}" "${summary}" "${trainer}/scripts/SmartThinker_Distill_7B.sh"; do
+    for path in "${model}" "${train}" "${val}" "${summary}" "${trainer}/scripts/SmartThinker_Distill_1.5B.sh"; do
         [[ -e "${path}" ]] || { echo "Missing: ${path}" >&2; exit 2; }
     done
 fi
@@ -28,12 +28,19 @@ export ARIS_VLLM_V1_BUDGET=1.0
 export ARIS_VLLM_V1_END_THINK_TOKEN_IDS=151649
 export ARIS_VLLM_V1_NATIVE_FUSED=0
 export VLLM_ATTENTION_BACKEND=FLASH_ATTN
+export ARIS_ROLLOUT_RATIO_FILTER="${ARIS_ROLLOUT_RATIO_FILTER:-1}"
+export ARIS_ROLLOUT_RATIO_LOW="${ARIS_ROLLOUT_RATIO_LOW:-0.8}"
+export ARIS_ROLLOUT_RATIO_HIGH="${ARIS_ROLLOUT_RATIO_HIGH:-1.2}"
 exec bash "${root}/run_75mixed_75think.sh" "${dry_run[@]}" "${output}" -- \
-    bash "${trainer}/scripts/SmartThinker_Distill_7B.sh" --model "${model}" \
+    bash "${trainer}/scripts/SmartThinker_Distill_1.5B.sh" --model "${model}" \
     "data.train_files=${train}" "data.val_files=${val}" \
+    "++actor_rollout_ref.rollout.calculate_log_probs=True" \
     "++ray_kwargs.ray_init.runtime_env.env_vars.PYTHONPATH='${PYTHONPATH}'" \
     "++ray_kwargs.ray_init.runtime_env.env_vars.ARIS_VLLM_V1_SUMMARY_JSON='${summary}'" \
     "++ray_kwargs.ray_init.runtime_env.env_vars.ARIS_VLLM_V1_BUDGET='1.0'" \
     "++ray_kwargs.ray_init.runtime_env.env_vars.ARIS_VLLM_V1_END_THINK_TOKEN_IDS='151649'" \
     "++ray_kwargs.ray_init.runtime_env.env_vars.ARIS_VLLM_V1_NATIVE_FUSED='0'" \
+    "++ray_kwargs.ray_init.runtime_env.env_vars.ARIS_ROLLOUT_RATIO_FILTER='${ARIS_ROLLOUT_RATIO_FILTER}'" \
+    "++ray_kwargs.ray_init.runtime_env.env_vars.ARIS_ROLLOUT_RATIO_LOW='${ARIS_ROLLOUT_RATIO_LOW}'" \
+    "++ray_kwargs.ray_init.runtime_env.env_vars.ARIS_ROLLOUT_RATIO_HIGH='${ARIS_ROLLOUT_RATIO_HIGH}'" \
     "${@}"
